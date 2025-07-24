@@ -1,0 +1,85 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.11]  # Adjust Python version
+        node-version: [18]      # Node.js version (used later for frontend)
+
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # -------------------------
+      # BACKEND (Django)
+      # -------------------------
+
+      # 2. Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 3. Install backend dependencies
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      # 4. Run backend tests (pytest)
+      - name: Run backend tests
+        run: |
+          cd backend
+          pytest -v
+        env:
+          DJANGO_SETTINGS_MODULE: backend.settings
+          PYTHONPATH: .
+
+      # -------------------------
+      # FRONTEND (React)
+      # -------------------------
+      # The following steps are commented out for now.
+      # Uncomment them when you start developing the frontend.
+
+      # - name: Set up Node.js ${{ matrix.node-version }}
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: ${{ matrix.node-version }}
+
+      # - name: Install frontend dependencies
+      #   run: |
+      #     cd frontend
+      #     npm install
+
+      # - name: Build frontend
+      #   run: |
+      #     cd frontend
+      #     npm run build
+
+      # -------------------------
+      # CODE QUALITY CHECKS
+      # -------------------------
+
+      # 5. Python linting
+      - name: Run flake8 (Python linting)
+        run: |
+          pip install flake8
+          flake8 backend || true
+
+      # JavaScript linting
+      # - name: Run eslint (JS linting)
+      #   run: |
+      #     cd frontend
+      #     npm install eslint
+      #     npx eslint . || true
+
