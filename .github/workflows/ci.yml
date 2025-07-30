@@ -48,23 +48,21 @@ jobs:
       # -------------------------
       # FRONTEND (React)
       # -------------------------
-      # The following steps are commented out for now.
-      # Uncomment them when you start developing the frontend.
 
-      # - name: Set up Node.js ${{ matrix.node-version }}
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: ${{ matrix.node-version }}
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
 
-      # - name: Install frontend dependencies
-      #   run: |
-      #     cd frontend
-      #     npm install
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install
 
-      # - name: Build frontend
-      #   run: |
-      #     cd frontend
-      #     npm run build
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
 
       # -------------------------
       # CODE QUALITY CHECKS
@@ -77,9 +75,9 @@ jobs:
           flake8 backend || true
 
       # JavaScript linting
-      # - name: Run eslint (JS linting)
-      #   run: |
-      #     cd frontend
-      #     npm install eslint
-      #     npx eslint . || true
+      - name: Run eslint (JS linting)
+        run: |
+          cd frontend
+          npm install eslint
+          npx eslint . || true
 
