@@ -11,3 +11,4 @@ python-dotenv
 pytest
 pytest-django
 gunicorn
+dj-database-url
