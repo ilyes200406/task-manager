@@ -45,6 +45,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres to be ready
+        run: |
+          until pg_isready -h postgres -p 5432; do
+            echo "Waiting for Postgres..."
+            sleep 5
+          done
+        env:
+          PGPASSWORD: postgresql
+
+
       - name: Run backend tests
         run: |
           cd backend
