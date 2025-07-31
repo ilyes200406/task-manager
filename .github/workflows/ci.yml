@@ -71,7 +71,7 @@ jobs:
           cd backend
           pytest -v
         env:
-          DATABASE_URL: postgres://postgres:postgresql@postgres:5432/taskdb
+          DATABASE_URL: postgres://postgres:postgresql@localhost:5432/taskdb
           DJANGO_SETTINGS_MODULE: backend.settings
           PYTHONPATH: .
 
