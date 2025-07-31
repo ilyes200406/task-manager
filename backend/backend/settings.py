@@ -97,9 +97,15 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 DATABASES = {
-    'default': dj_database_url.config(default=os.environ.get('DATABASE_URL'))
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('POSTGRES_DB', 'taskdb'),
+        'USER': os.getenv('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgresql'),
+        'HOST': os.getenv('DB_HOST', 'db'),  # ← Default to 'db' for Docker
+        'PORT': os.getenv('DB_PORT', '5432'),
+    }
 }
 
 
@@ -162,3 +168,5 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWS_CREDENTIALS = True
+
+print("!!! ACTIVE DATABASE CONFIG !!!", DATABASES['default'])
