@@ -18,7 +18,7 @@ jobs:
         env:
           POSTGRES_DB: taskdb
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgresql
+          POSTGRES_PASSWORD: 1234
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -44,27 +44,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
-
-      - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
-
-      - name: Wait for Postgres to be ready
-        run: |
-          retries=30
-          count=0
-          until pg_isready -h postgres -p 5432; do
-            if [ $count -ge $retries ]; then
-              echo "Postgres did not become ready in time, exiting."
-              exit 1
-            fi
-            echo "Waiting for Postgres... ($count)"
-            count=$((count+1))
-            sleep 5
-          done
-        env:
-          PGPASSWORD: postgresql
-
-
 
       - name: Run backend tests
         run: |

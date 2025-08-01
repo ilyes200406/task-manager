@@ -14,7 +14,7 @@ function Home() {
 
     const getNotes = () => {
         api
-            .get("/api/notes/")
+            .get("notes/")
             .then((res) => res.data)
             .then((data) => {
                 setNotes(data);
@@ -25,7 +25,7 @@ function Home() {
 
     const deleteNote = (id) => {
         api
-            .delete(`/api/notes/delete/${id}/`)
+            .delete(`notes/delete/${id}/`)
             .then((res) => {
                 if (res.status === 204) alert("Note deleted!");
                 else alert("Failed to delete note.");
@@ -37,7 +37,7 @@ function Home() {
     const createNote = (e) => {
         e.preventDefault();
         api
-            .post("/api/notes/", { content, title })
+            .post("notes/", { content, title })
             .then((res) => {
                 if (res.status === 201) alert("Note created!");
                 else alert("Failed to make note.");

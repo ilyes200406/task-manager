@@ -14,7 +14,6 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 import os
-import dj_database_url
 
 load_dotenv()
 
@@ -100,28 +99,13 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('POSTGRES_DB', 'taskdb'),
-        'USER': os.getenv('POSTGRES_USER', 'postgres'),
-        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'postgresql'),
-        'HOST': os.getenv('DB_HOST', 'db'),  # ← Default to 'db' for Docker
-        'PORT': os.getenv('DB_PORT', '5432'),
+        'NAME': os.getenv('POSTGRES_DB'),
+        'USER': os.getenv('POSTGRES_USER'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
+        'HOST': os.getenv('POSTGRES_HOST'),
+        'PORT': os.getenv('POSTGRES_PORT'),
     }
 }
-
-
-
-#DATABASES = {
-#    'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'taskdb',
-#        'USER': 'postgres',
-#        'PASSWORD': 'postgresql',
-#        'HOST': 'localhost',
-#        'PORT': '5432',
-#        'OPTIONS': {'client_encoding': 'UTF8'},  # Optional but recommended
-#    }
-#}
-
 
 
 
@@ -168,5 +152,3 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWS_CREDENTIALS = True
-
-print("!!! ACTIVE DATABASE CONFIG !!!", DATABASES['default'])
