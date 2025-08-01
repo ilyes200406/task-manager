@@ -24,6 +24,14 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+    
+    env:
+      POSTGRES_DB: taskdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgresql
+      POSTGRES_HOST: localhost
+      DJANGO_SETTINGS_MODULE: backend.settings
+
 
     strategy:
       matrix:
