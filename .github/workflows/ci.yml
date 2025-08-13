@@ -1,5 +1,5 @@
 name: CI Pipeline
-#..
+
 on:
   push:
     branches: [ main ]
@@ -7,81 +7,20 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  backend-python:
+    uses: ./.github/workflows/reusable_workflow.yml
+    with:
+      language: python
+      version: "3.11"
+      working-directory: backend
+      run-lint: true
+      run-tests: true
 
-    services:
-      postgres:
-        image: postgres:15
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_DB: taskdb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgresql
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    env:
-      POSTGRES_DB: taskdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgresql
-      POSTGRES_HOST: localhost
-      DJANGO_SETTINGS_MODULE: backend.settings
-
-
-    strategy:
-      matrix:
-        python-version: [3.11]
-        node-version: [18]
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # Backend setup and tests
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install backend dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-
-      - name: Run backend tests
-        run: |
-          cd backend
-          pytest -v
-
-      # Frontend setup and build
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install
-
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build
-
-      # Code quality checks
-      - name: Run flake8 (Python linting)
-        run: |
-          pip install flake8
-          flake8 backend || true
-
-      - name: Run eslint (JS linting)
-        run: |
-          cd frontend
-          npm install eslint
-          npx eslint . || true
+  frontend-node:
+    uses: ./.github/workflows/reusable_workflow.yml
+    with:
+      language: node
+      version: "18"
+      working-directory: frontend
+      run-lint: true
+      run-tests: false # skip tests if you don't have frontend tests yet

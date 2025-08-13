@@ -1,0 +1,88 @@
+name: Build & Test (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      run-lint:
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ################################
+      # PYTHON
+      ################################
+      - name: Setup Python
+        if: ${{ inputs.language == 'python' }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ inputs.version }}
+
+      - name: Install Python deps
+        if: ${{ inputs.language == 'python' }}
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "${{ inputs.working-directory }}/requirements.txt" ]; then
+            pip install -r "${{ inputs.working-directory }}/requirements.txt"
+          fi
+
+      - name: Run Python tests
+        if: ${{ inputs.language == 'python' && inputs.run-tests }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          pytest -v
+
+      - name: Python lint
+        if: ${{ inputs.language == 'python' && inputs.run-lint }}
+        run: |
+          pip install flake8
+          flake8 "${{ inputs.working-directory }}" || true
+
+      ################################
+      # NODE
+      ################################
+      - name: Setup Node
+        if: ${{ inputs.language == 'node' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.version }}
+
+      - name: Install Node deps
+        if: ${{ inputs.language == 'node' }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          npm install
+
+      - name: Build Node app
+        if: ${{ inputs.language == 'node' }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          npm run build
+
+      - name: Node lint
+        if: ${{ inputs.language == 'node' && inputs.run-lint }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          npm install eslint
+          npx eslint . || true
