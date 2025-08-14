@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         py: [ "3.10", "3.11" ]
-    uses: ./.github/workflows/enhanced-reusable.yml
+    uses: ./.github/workflows/reusable_workflow.yml
     with:
       language: python
       version: ${{ matrix.py }}
@@ -24,7 +24,7 @@ jobs:
       artifact-path: dist/
 
   frontend:
-    uses: ./.github/workflows/enhanced-reusable.yml
+    uses: ./.github/workflows/reusable_workflow.yml
     with:
       language: node
       version: "20"
