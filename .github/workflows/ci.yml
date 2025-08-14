@@ -11,7 +11,7 @@ jobs:
       matrix:
         py: [ "3.10", "3.11" ]
       fail-fast: false  # Continue testing other Python versions if one fails
-    uses: ./.github/workflows/reusable_workflow.yml  # Match your actual filename
+    uses: ./.github/workflows/workflow.yml  # Match your actual filename
     with:
       language: python
       version: ${{ matrix.py }}
@@ -26,7 +26,7 @@ jobs:
       artifact-path: dist/
 
   frontend:
-    uses: ./.github/workflows/reusable_workflow.yml  # Match your actual filename
+    uses: ./.github/workflows/workflow.yml  # Match your actual filename
     with:
       language: node
       version: "20"
@@ -39,12 +39,3 @@ jobs:
       enable-security-scan: true  # Enable security scanning
       upload-artifacts: true
       artifact-path: build/
-
-  # Optional: Add a job that depends on both backend and frontend
-  integration-check:
-    needs: [backend, frontend]
-    runs-on: ubuntu-latest
-    if: success()  # Only run if both backend and frontend succeed
-    steps:
-      - name: Integration check passed
-        run: echo "All builds completed successfully!"
