@@ -3,86 +3,252 @@ name: Build & Test (Reusable)
 on:
   workflow_call:
     inputs:
-      language:
-        required: true
-        type: string
-      version:
-        required: true
-        type: string
-      working-directory:
-        required: false
-        type: string
-        default: "."
-      run-lint:
-        required: false
-        type: boolean
-        default: true
-      run-tests:
-        required: false
-        type: boolean
-        default: true
+      language: { required: true, type: string }          # python | node | java | go
+      version:  { required: true, type: string }          # e.g. 3.11, 20, 17, 1.21
+      working-directory: { required: false, type: string, default: "." }
+      run-tests: { required: false, type: boolean, default: true }
+      run-lint:  { required: false, type: boolean, default: true }
+
+      # Advanced toggles
+      enable-caching:       { required: false, type: boolean, default: true }
+      enable-coverage:      { required: false, type: boolean, default: false }
+      coverage-threshold:   { required: false, type: number,  default: 80 }
+      enable-security-scan: { required: false, type: boolean, default: false }
+      upload-artifacts:     { required: false, type: boolean, default: false }
+      artifact-path:        { required: false, type: string,  default: "" }
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: enh-${{ github.ref }}-${{ inputs.language }}-${{ inputs.version }}
+      cancel-in-progress: true
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Set WORKDIR
+        run: echo "WORKDIR=${{ inputs.working-directory }}" >> $GITHUB_ENV
 
       ################################
-      # PYTHON
+      # CACHING (generic key builder)
       ################################
+      - name: Compute cache key
+        if: ${{ inputs.enable-caching }}
+        id: cache-key
+        shell: bash
+        run: |
+          set -e
+          case "${{ inputs.language }}" in
+            python)
+              f="$WORKDIR/requirements.txt"
+              [ -f "$f" ] && echo "key=py-${{ inputs.version }}-$(sha256sum "$f" | cut -d' ' -f1)" >> $GITHUB_OUTPUT && echo "paths=~/.cache/pip" >> $GITHUB_OUTPUT
+              ;;
+            node)
+              f="$WORKDIR/package-lock.json"
+              [ -f "$f" ] && echo "key=node-${{ inputs.version }}-$(sha256sum "$f" | cut -d' ' -f1)" >> $GITHUB_OUTPUT && echo "paths=$WORKDIR/node_modules" >> $GITHUB_OUTPUT
+              ;;
+            java)
+              echo "key=mvn-${{ inputs.version }}-${{ hashFiles(format('{0}/pom.xml', inputs.working-directory)) }}" >> $GITHUB_OUTPUT
+              echo "paths=~/.m2/repository" >> $GITHUB_OUTPUT
+              ;;
+            go)
+              echo "key=go-${{ inputs.version }}-${{ hashFiles(format('{0}/go.sum', inputs.working-directory)) }}" >> $GITHUB_OUTPUT
+              echo "paths=~/.cache/go-build\n${{ github.workspace }}/pkg/mod" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Restore cache
+        if: ${{ inputs.enable-caching && steps.cache-key.outputs.key }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-key.outputs.paths }}
+          key:  ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            ${{ runner.os }}-${{ inputs.language }}-
+
+      ############
+      # PYTHON
+      ############
       - name: Setup Python
         if: ${{ inputs.language == 'python' }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ inputs.version }}
+        uses: actions/setup-python@v5
+        with: { python-version: ${{ inputs.version }} }
 
       - name: Install Python deps
         if: ${{ inputs.language == 'python' }}
         run: |
           python -m pip install --upgrade pip
-          if [ -f "${{ inputs.working-directory }}/requirements.txt" ]; then
-            pip install -r "${{ inputs.working-directory }}/requirements.txt"
-          fi
+          [ -f "$WORKDIR/requirements.txt" ] && pip install -r "$WORKDIR/requirements.txt"
+          if ${{ inputs.enable-coverage }}; then pip install pytest-cov coverage; fi
 
-      - name: Run Python tests
-        if: ${{ inputs.language == 'python' && inputs.run-tests }}
-        run: |
-          cd "${{ inputs.working-directory }}"
-          pytest -v
-
-      - name: Python lint
+      - name: Lint (flake8)
         if: ${{ inputs.language == 'python' && inputs.run-lint }}
         run: |
           pip install flake8
-          flake8 "${{ inputs.working-directory }}" || true
+          cd "$WORKDIR"
+          flake8 . --max-line-length=88 --extend-ignore=E203,W503
 
-      ################################
+      - name: Test (pytest)
+        if: ${{ inputs.language == 'python' && inputs.run-tests }}
+        run: |
+          cd "$WORKDIR"
+          if ${{ inputs.enable-coverage }}; then
+            pytest -v --cov=. --cov-report=xml --cov-report=term-missing
+          else
+            pytest -v
+          fi
+
+      ############
       # NODE
-      ################################
+      ############
       - name: Setup Node
         if: ${{ inputs.language == 'node' }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.version }}
+          cache: npm
+          cache-dependency-path: ${{ env.WORKDIR }}/package-lock.json
 
       - name: Install Node deps
         if: ${{ inputs.language == 'node' }}
         run: |
-          cd "${{ inputs.working-directory }}"
-          npm install
+          cd "$WORKDIR"
+          if [ -f package-lock.json ]; then npm ci; else npm install; endif
 
-      - name: Build Node app
-        if: ${{ inputs.language == 'node' }}
-        run: |
-          cd "${{ inputs.working-directory }}"
-          npm run build
-
-      - name: Node lint
+      - name: Lint (eslint)
         if: ${{ inputs.language == 'node' && inputs.run-lint }}
         run: |
-          cd "${{ inputs.working-directory }}"
-          npm install eslint
-          npx eslint . || true
+          cd "$WORKDIR"
+          npx --yes eslint . --max-warnings=0
+
+      - name: Build (Node)
+        if: ${{ inputs.language == 'node' }}
+        run: |
+          cd "$WORKDIR"
+          npm run build --if-present
+
+      - name: Test (npm)
+        if: ${{ inputs.language == 'node' && inputs.run-tests }}
+        run: |
+          cd "$WORKDIR"
+          if ${{ inputs.enable-coverage }}; then
+            npm test -- --coverage --watchAll=false
+          else
+            npm test -- --watchAll=false
+          fi
+
+      ############
+      # JAVA / MAVEN
+      ############
+      - name: Setup Java (Temurin)
+        if: ${{ inputs.language == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.version }}
+          cache: maven
+
+      - name: Lint (Checkstyle)
+        if: ${{ inputs.language == 'java' && inputs.run-lint }}
+        run: |
+          cd "$WORKDIR"
+          mvn -B -q checkstyle:check
+
+      - name: Build & Test (Maven)
+        if: ${{ inputs.language == 'java' && inputs.run-tests }}
+        run: |
+          cd "$WORKDIR"
+          if ${{ inputs.enable-coverage }}; then
+            mvn -B clean verify
+          else
+            mvn -B -DskipTests=false test
+          fi
+
+      ############
+      # GO
+      ############
+      - name: Setup Go
+        if: ${{ inputs.language == 'go' }}
+        uses: actions/setup-go@v5
+        with: { go-version: ${{ inputs.version }} }
+
+      - name: Lint (golangci-lint)
+        if: ${{ inputs.language == 'go' && inputs.run-lint }}
+        run: |
+          cd "$WORKDIR"
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          ~/go/bin/golangci-lint run ./...
+
+      - name: Test (go)
+        if: ${{ inputs.language == 'go' && inputs.run-tests }}
+        run: |
+          cd "$WORKDIR"
+          if ${{ inputs.enable-coverage }}; then
+            go test ./... -coverprofile=coverage.out
+          else
+            go test ./...
+          fi
+
+      ################################
+      # COVERAGE CHECK
+      ################################
+      - name: Enforce coverage threshold
+        if: ${{ inputs.enable-coverage }}
+        shell: bash
+        run: |
+          set -e
+          case "${{ inputs.language }}" in
+            python)
+              cd "$WORKDIR"
+              coverage report --fail-under=${{ inputs.coverage-threshold }}
+              ;;
+            node)
+              echo "Ensure your jest config writes coverage-summary.json; parse & assert here."
+              ;;
+            java)
+              echo "Parse JaCoCo XML from target/site/jacoco/jacoco.xml and assert threshold here."
+              ;;
+            go)
+              echo "Use 'go tool cover -func=coverage.out' to compute and enforce threshold."
+              ;;
+          esac
+
+      ################################
+      # SECURITY SCAN
+      ################################
+      - name: Security scan
+        if: ${{ inputs.enable-security-scan }}
+        shell: bash
+        run: |
+          case "${{ inputs.language }}" in
+            python)
+              pip install safety bandit
+              cd "$WORKDIR"
+              safety check
+              bandit -r . || true
+              ;;
+            node)
+              cd "$WORKDIR"
+              npm audit --audit-level=moderate || true
+              ;;
+            java)
+              echo "Add OWASP dependency-check or Snyk here."
+              ;;
+            go)
+              echo "Add gosec or Snyk here."
+              ;;
+          esac
+
+      ################################
+      # ARTIFACTS
+      ################################
+      - name: Upload artifacts
+        if: ${{ inputs.upload-artifacts && inputs.artifact-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ inputs.language }}-${{ github.run_id }}
+          path: ${{ env.WORKDIR }}/${{ inputs.artifact-path }}
+          retention-days: 14

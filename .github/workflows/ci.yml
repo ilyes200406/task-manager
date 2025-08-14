@@ -1,26 +1,37 @@
-name: CI Pipeline
+# .github/workflows/ci.yml
+name: CI with Gradual Enhancement
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
 
 jobs:
-  backend-python:
-    uses: ./.github/workflows/reusable_workflow.yml
+  backend:
+    strategy:
+      matrix:
+        py: [ "3.10", "3.11" ]
+    uses: ./.github/workflows/enhanced-reusable.yml
     with:
       language: python
-      version: "3.11"
+      version: ${{ matrix.py }}
       working-directory: backend
-      run-lint: true
       run-tests: true
+      run-lint: true
+      enable-caching: true
+      enable-coverage: true
+      coverage-threshold: 80
+      upload-artifacts: true
+      artifact-path: dist/
 
-  frontend-node:
-    uses: ./.github/workflows/reusable_workflow.yml
+  frontend:
+    uses: ./.github/workflows/enhanced-reusable.yml
     with:
       language: node
-      version: "18"
+      version: "20"
       working-directory: frontend
+      run-tests: true
       run-lint: true
-      run-tests: false # skip tests if you don't have frontend tests yet
+      enable-caching: true
+      enable-coverage: true
+      upload-artifacts: true
+      artifact-path: build/
