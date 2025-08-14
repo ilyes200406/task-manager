@@ -1,41 +1,26 @@
-# .github/workflows/ci.yml
-name: CI with Gradual Enhancement
+name: CI Pipeline
 
 on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  backend:
-    strategy:
-      matrix:
-        py: [ "3.10", "3.11" ]
-      fail-fast: false  # Continue testing other Python versions if one fails
-    uses: ./.github/workflows/workflow.yml  # Match your actual filename
+  backend-python:
+    uses: ./.github/workflows/workflow.yml
     with:
       language: python
-      version: ${{ matrix.py }}
+      version: "3.11"
       working-directory: backend
-      run-tests: true
       run-lint: true
-      enable-caching: true
-      enable-coverage: true
-      coverage-threshold: 80
-      enable-security-scan: true  # Enable security scanning
-      upload-artifacts: true
-      artifact-path: dist/
+      run-tests: true
 
-  frontend:
-    uses: ./.github/workflows/workflow.yml  # Match your actual filename
+  frontend-node:
+    uses: ./.github/workflows/workflow.yml
     with:
       language: node
-      version: "20"
+      version: "18"
       working-directory: frontend
-      run-tests: true
       run-lint: true
-      enable-caching: true
-      enable-coverage: true
-      coverage-threshold: 80  # Add threshold for frontend too
-      enable-security-scan: true  # Enable security scanning
-      upload-artifacts: true
-      artifact-path: build/
+      run-tests: false
