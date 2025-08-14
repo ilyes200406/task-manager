@@ -2,7 +2,7 @@
 name: CI with Gradual Enhancement
 
 on:
-  push: { branches: [main] }
+  push: { branches: [main, develop] }
   pull_request: { branches: [main] }
 
 jobs:
@@ -10,7 +10,8 @@ jobs:
     strategy:
       matrix:
         py: [ "3.10", "3.11" ]
-    uses: ./.github/workflows/reusable_workflow.yml
+      fail-fast: false  # Continue testing other Python versions if one fails
+    uses: ./.github/workflows/build-test-reusable.yml  # Match your actual filename
     with:
       language: python
       version: ${{ matrix.py }}
@@ -20,11 +21,12 @@ jobs:
       enable-caching: true
       enable-coverage: true
       coverage-threshold: 80
+      enable-security-scan: true  # Enable security scanning
       upload-artifacts: true
       artifact-path: dist/
 
   frontend:
-    uses: ./.github/workflows/reusable_workflow.yml
+    uses: ./.github/workflows/build-test-reusable.yml  # Match your actual filename
     with:
       language: node
       version: "20"
@@ -33,5 +35,16 @@ jobs:
       run-lint: true
       enable-caching: true
       enable-coverage: true
+      coverage-threshold: 80  # Add threshold for frontend too
+      enable-security-scan: true  # Enable security scanning
       upload-artifacts: true
       artifact-path: build/
+
+  # Optional: Add a job that depends on both backend and frontend
+  integration-check:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    if: success()  # Only run if both backend and frontend succeed
+    steps:
+      - name: Integration check passed
+        run: echo "All builds completed successfully!"
