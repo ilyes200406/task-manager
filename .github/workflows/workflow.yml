@@ -86,3 +86,87 @@ jobs:
           cd "${{ inputs.working-directory }}"
           npm install eslint
           npx eslint . || true
+
+      ################################
+      # JAVA
+      ################################
+      - name: Setup Java
+        if: ${{ inputs.language == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.version }}
+          distribution: temurin
+
+      - name: Build Java app
+        if: ${{ inputs.language == 'java' }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          ./mvnw clean package || mvn clean package
+
+      - name: Java lint (Checkstyle)
+        if: ${{ inputs.language == 'java' && inputs.run-lint }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          mvn checkstyle:check || true
+
+      - name: Run Java tests
+        if: ${{ inputs.language == 'java' && inputs.run-tests }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          mvn test
+
+      ################################
+      # GO
+      ################################
+      - name: Setup Go
+        if: ${{ inputs.language == 'go' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.version }}
+
+      - name: Install Go deps
+        if: ${{ inputs.language == 'go' }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          go mod tidy
+
+      - name: Go lint
+        if: ${{ inputs.language == 'go' && inputs.run-lint }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          go install golang.org/x/lint/golint@latest
+          golint ./... || true
+
+      - name: Run Go tests
+        if: ${{ inputs.language == 'go' && inputs.run-tests }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          go test ./... -v
+
+      ################################
+      # RUBY
+      ################################
+      - name: Setup Ruby
+        if: ${{ inputs.language == 'ruby' }}
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ inputs.version }}
+
+      - name: Install Ruby deps
+        if: ${{ inputs.language == 'ruby' }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          bundle install
+
+      - name: Ruby lint (RuboCop)
+        if: ${{ inputs.language == 'ruby' && inputs.run-lint }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          gem install rubocop
+          rubocop || true
+
+      - name: Run Ruby tests
+        if: ${{ inputs.language == 'ruby' && inputs.run-tests }}
+        run: |
+          cd "${{ inputs.working-directory }}"
+          bundle exec rspec || true
