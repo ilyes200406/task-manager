@@ -21,6 +21,10 @@ on:
         required: false
         type: boolean
         default: true
+      upload-artifacts:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-and-test:
@@ -68,6 +72,16 @@ jobs:
           pip install flake8
           flake8 "${{ inputs.working-directory }}" || true
 
+      - name: Upload Python artifacts
+        if: ${{ inputs.language == 'python' && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-artifacts
+          path: |
+            ${{ inputs.working-directory }}/dist
+            ${{ inputs.working-directory }}/build
+            ${{ inputs.working-directory }}/.pytest_cache
+
       ################################
       # NODE
       ################################
@@ -107,6 +121,15 @@ jobs:
           npm install eslint
           npx eslint . || true
 
+      - name: Upload Node artifacts
+        if: ${{ inputs.language == 'node' && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-artifacts
+          path: |
+            ${{ inputs.working-directory }}/dist
+            ${{ inputs.working-directory }}/build
+
       ################################
       # JAVA
       ################################
@@ -143,6 +166,15 @@ jobs:
         run: |
           cd "${{ inputs.working-directory }}"
           mvn test
+      
+      - name: Upload Java artifacts
+        if: ${{ inputs.language == 'java' && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-artifacts
+          path: |
+            ${{ inputs.working-directory }}/target/*.jar
+            ${{ inputs.working-directory }}/target/*.war
 
       ################################
       # GO
@@ -181,6 +213,16 @@ jobs:
           cd "${{ inputs.working-directory }}"
           go test ./... -v
 
+      - name: Upload Go artifacts
+        if: ${{ inputs.language == 'go' && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-artifacts
+          path: |
+            ${{ inputs.working-directory }}/bin
+            ${{ inputs.working-directory }}/*.exe
+            ${{ inputs.working-directory }}/*.out
+
       ################################
       # RUBY
       ################################
@@ -217,3 +259,12 @@ jobs:
         run: |
           cd "${{ inputs.working-directory }}"
           bundle exec rspec || true
+      
+      - name: Upload Ruby artifacts
+        if: ${{ inputs.language == 'ruby' && inputs.upload-artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruby-artifacts
+          path: |
+            ${{ inputs.working-directory }}/pkg
+            ${{ inputs.working-directory }}/coverage

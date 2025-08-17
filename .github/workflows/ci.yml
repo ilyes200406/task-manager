@@ -15,6 +15,7 @@ jobs:
       working-directory: backend
       run-lint: true
       run-tests: true
+      upload-artifacts: true
 
   frontend-node:
     uses: ./.github/workflows/workflow.yml
@@ -24,3 +25,4 @@ jobs:
       working-directory: frontend
       run-lint: true
       run-tests: false
+      upload-artifacts: true

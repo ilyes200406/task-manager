@@ -44,3 +44,7 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# build outputs
+dist/
+build/
