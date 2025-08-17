@@ -39,6 +39,15 @@ jobs:
         with:
           python-version: ${{ inputs.version }}
 
+      - name: Cache Python packages
+        if: ${{ inputs.language == 'python' }}
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('${{ inputs.working-directory }}/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install Python deps
         if: ${{ inputs.language == 'python' }}
         run: |
@@ -67,6 +76,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.version }}
+
+      - name: Cache Node modules
+        if: ${{ inputs.language == 'node' }}
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/yarn
+          key: ${{ runner.os }}-node-${{ hashFiles('${{ inputs.working-directory }}/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: Install Node deps
         if: ${{ inputs.language == 'node' }}
@@ -97,6 +117,15 @@ jobs:
           java-version: ${{ inputs.version }}
           distribution: temurin
 
+      - name: Cache Maven packages
+        if: ${{ inputs.language == 'java' }}
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('${{ inputs.working-directory }}/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
       - name: Build Java app
         if: ${{ inputs.language == 'java' }}
         run: |
@@ -123,6 +152,15 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.version }}
+
+      - name: Cache Go modules
+        if: ${{ inputs.language == 'go' }}
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('${{ inputs.working-directory }}/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
       - name: Install Go deps
         if: ${{ inputs.language == 'go' }}
@@ -151,6 +189,15 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ inputs.version }}
+
+      - name: Cache Ruby gems
+        if: ${{ inputs.language == 'ruby' }}
+        uses: actions/cache@v3
+        with:
+          path: vendor/bundle
+          key: ${{ runner.os }}-ruby-${{ hashFiles('${{ inputs.working-directory }}/Gemfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ruby-
 
       - name: Install Ruby deps
         if: ${{ inputs.language == 'ruby' }}
