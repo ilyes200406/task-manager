@@ -113,6 +113,12 @@ jobs:
         run: |
           cd "${{ inputs.working-directory }}"
           npm run build
+      
+      - name: Run Node.js tests
+        if: ${{ inputs.language == 'node' && inputs.run-tests }}
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npm test
 
       - name: Node lint
         if: ${{ inputs.language == 'node' && inputs.run-lint }}
