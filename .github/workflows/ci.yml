@@ -25,10 +25,4 @@ jobs:
       working-directory: frontend
       run-lint: true
       run-tests: false
-      upload-artifacts: true
-
-  deploy:
-    needs: [backend-python, frontend-node]
-    uses: ./.github/workflows/deploy.yml 
-    with:
-      force_deploy: false 
+      upload-artifacts: true 
