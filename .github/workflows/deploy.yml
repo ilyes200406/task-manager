@@ -1,17 +1,11 @@
-name: Deploy to VirtualBox VM
+name: Deploy to Local VM
 
 on:
-  # Trigger on push to main branches
-  push:
-    branches: [ main, master ]
-  
-  # Trigger after successful build workflow
   workflow_run:
-    workflows: ["Build & Test (Reusable)"]  # Replace with your actual workflow name
+    workflows: ["CI Pipeline"]  # Fixed: Match the actual CI workflow name
     types: [completed]
     branches: [main, master]
   
-  # Allow manual deployment for testing
   workflow_dispatch:
     inputs:
       force_deploy:
@@ -19,94 +13,199 @@ on:
         required: false
         default: false
         type: boolean
+      environment:
+        description: 'Deployment environment'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
 
 env:
-  APP_NAME: your-app-name
-  CONTAINER_NAME: your-app-container
+  REGISTRY: docker.io
+  IMAGE_NAME: my-app
 
 jobs:
-  deploy:
-    name: Deploy to VM
+  check-build-status:
+    runs-on: ubuntu-latest
+    outputs:
+      should-deploy: ${{ steps.check.outputs.should-deploy }}
+    steps:
+      - name: Check build workflow status
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.force_deploy }}" == "true" ]]; then
+              echo "should-deploy=true" >> $GITHUB_OUTPUT
+              echo "🚨 Force deployment triggered - bypassing build check"
+            else
+              echo "should-deploy=true" >> $GITHUB_OUTPUT
+              echo "📋 Manual deployment triggered"
+            fi
+          elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+            echo "✅ Build workflow succeeded, proceeding with deployment"
+          else
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+            echo "❌ Build workflow failed, skipping deployment"
+          fi
+
+  build-docker-image:
+    needs: check-build-status
+    if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      
-    - name: Setup SSH
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ secrets.HOST_IP }} >> ~/.ssh/known_hosts
-        
-    - name: Deploy Application
-      run: |
-        ssh deploy@${{ secrets.HOST_IP }} << 'EOF'
-          set -e
-          
-          echo "🚀 Starting deployment..."
-          
-          # Create app directory if it doesn't exist
-          mkdir -p /home/deploy/apps/${{ env.APP_NAME }}
-          cd /home/deploy/apps/${{ env.APP_NAME }}
-          
-          # Clone or pull latest code
-          if [ ! -d ".git" ]; then
-            echo "📥 Cloning repository..."
-            git clone ${{ github.server_url }}/${{ github.repository }} .
-          else
-            echo "📥 Pulling latest changes..."
-            git fetch origin
-            git reset --hard origin/${{ github.ref_name }}
-          fi
-          
-          # Build Docker image
-          echo "🔨 Building Docker image..."
-          docker build -t ${{ env.APP_NAME }}:latest .
-          
-          # Stop and remove existing container
-          echo "🛑 Stopping existing container..."
-          docker stop ${{ env.CONTAINER_NAME }} 2>/dev/null || true
-          docker rm ${{ env.CONTAINER_NAME }} 2>/dev/null || true
-          
-          # Run new container
-          echo "▶️ Starting new container..."
-          docker run -d \
-            --name ${{ env.CONTAINER_NAME }} \
-            --restart unless-stopped \
-            -p 80:3000 \
-            -e VERSION="${{ github.sha }}" \
-            ${{ env.APP_NAME }}:latest
-          
-          # Wait for container to be healthy
-          echo "⏳ Waiting for application to be ready..."
-          for i in {1..30}; do
-            if curl -f http://localhost:80 > /dev/null 2>&1; then
-              echo "✅ Application is healthy!"
-              break
-            fi
-            echo "⏳ Waiting... ($i/30)"
-            sleep 2
-          done
-          
-          # Cleanup old images
-          echo "🧹 Cleaning up old images..."
-          docker image prune -f
-          
-          echo "🎉 Deployment completed successfully!"
-        EOF
-        
-    - name: Verify Deployment
-      run: |
-        echo "🔍 Verifying deployment..."
-        ssh deploy@${{ secrets.HOST_IP }} << 'EOF'
-          if curl -f http://localhost:80 > /dev/null 2>&1; then
-            echo "✅ Application is responding correctly!"
-            docker ps | grep ${{ env.CONTAINER_NAME }}
-          else
-            echo "❌ Application health check failed!"
-            docker logs ${{ env.CONTAINER_NAME }} --tail 20
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Only login if secrets are available
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/myimage.tar  # Save locally if not pushing
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VCS_REF=${{ github.sha }}
+
+      # Upload image as artifact if not pushing to registry
+      - name: Upload Docker image
+        if: ${{ !secrets.DOCKER_USERNAME || !secrets.DOCKER_PASSWORD }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/myimage.tar
+
+  deploy-to-vm:
+    needs: [check-build-status, build-docker-image]
+    if: needs.check-build-status.outputs.should-deploy == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Check if VM secrets are configured
+      - name: Validate VM configuration
+        run: |
+          if [[ -z "${{ secrets.VM_HOST }}" ]] || [[ -z "${{ secrets.VM_USERNAME }}" ]] || [[ -z "${{ secrets.VM_SSH_KEY }}" ]]; then
+            echo "❌ VM deployment secrets not configured"
+            echo "Required secrets: VM_HOST, VM_USERNAME, VM_SSH_KEY"
             exit 1
           fi
-        EOF
+          echo "✅ VM configuration validated"
+
+      - name: Deploy to VirtualBox VM
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || '22' }}
+          timeout: 60s
+          command_timeout: 300s
+          script: |
+            set -e
+            echo "🚀 Starting deployment to VM..."
+            
+            # Set variables
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+            CONTAINER_NAME="${{ env.IMAGE_NAME }}"
+            
+            # Only login if using Docker Hub
+            if [[ -n "${{ secrets.DOCKER_USERNAME }}" ]] && [[ -n "${{ secrets.DOCKER_PASSWORD }}" ]]; then
+              echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+              
+              # Pull latest image
+              echo "📥 Pulling latest Docker image..."
+              docker pull "$IMAGE_TAG"
+            else
+              echo "⚠️ No Docker Hub credentials, assuming local image build"
+            fi
+            
+            # Create backup of current container (if exists)
+            if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
+              echo "💾 Creating backup of current container..."
+              docker commit "$CONTAINER_NAME" "${CONTAINER_NAME}-backup-$(date +%Y%m%d-%H%M%S)" || true
+            fi
+            
+            # Stop and remove existing container
+            echo "🛑 Stopping existing container..."
+            docker stop "$CONTAINER_NAME" 2>/dev/null || echo "No container to stop"
+            docker rm "$CONTAINER_NAME" 2>/dev/null || echo "No container to remove"
+            
+            # Start new container
+            echo "▶️ Starting new container..."
+            docker run -d \
+              --name "$CONTAINER_NAME" \
+              --restart unless-stopped \
+              -p 80:3000 \
+              -e NODE_ENV=production \
+              -e DEPLOYMENT_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -e GIT_SHA="${{ github.sha }}" \
+              "$IMAGE_TAG"
+            
+            # Wait for container to start
+            echo "⏳ Waiting for container to start..."
+            sleep 10
+            
+            # Check if container is running
+            if docker ps | grep -q "$CONTAINER_NAME"; then
+              echo "✅ Container is running successfully!"
+              docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            else
+              echo "❌ Container failed to start!"
+              docker logs "$CONTAINER_NAME" 2>/dev/null || echo "No logs available"
+              exit 1
+            fi
+            
+            echo "🎉 Deployment completed successfully!"
+
+  verify-deployment:
+    needs: deploy-to-vm
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous steps had issues
+    
+    steps:
+      - name: Deployment summary
+        run: |
+          echo "📋 Deployment Summary"
+          echo "- Repository: ${{ github.repository }}"
+          echo "- Commit: ${{ github.sha }}"
+          echo "- Triggered by: ${{ github.event_name }}"
+          if [[ "${{ needs.deploy-to-vm.result }}" == "success" ]]; then
+            echo "✅ Deployment completed successfully"
+            echo "🔧 To verify manually:"
+            echo "1. SSH to your VM and check: docker ps"
+            echo "2. Test the application: curl http://localhost"
+          else
+            echo "❌ Deployment failed"
+            echo "🔍 Check the deploy-to-vm job logs for details"
+          fi
