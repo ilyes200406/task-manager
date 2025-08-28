@@ -20,10 +20,18 @@ on:
         options:
           - production
           - staging
+      service:
+        description: 'Service to deploy'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - backend
+          - frontend
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: my-app
 
 jobs:
   check-build-status:
@@ -50,12 +58,14 @@ jobs:
             echo "❌ Build workflow failed, skipping deployment"
           fi
 
-  build-docker-image:
+  build-images:
     needs: check-build-status
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
     outputs:
-      IMAGE_TAG: ${{ steps.set-tag.outputs.IMAGE_TAG }}
       HAS_DOCKER_CREDS: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS }}
     steps:
       - name: Checkout code
@@ -77,16 +87,15 @@ jobs:
             echo "ℹ️ No Docker Hub credentials, will build locally only"
           fi
 
-      - name: Set IMAGE_TAG
+      - name: Set image tag
         id: set-tag
         run: |
           if [[ -n "${{ secrets.DOCKER_USERNAME }}" ]]; then
-            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest"
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/my-app-${{ matrix.service }}:latest"
           else
-            IMAGE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/my-app-${{ matrix.service }}:latest"
           fi
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Using image tag: $IMAGE_TAG"
 
       - name: Log in to Docker Hub
@@ -99,26 +108,30 @@ jobs:
       - name: Build and optionally push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
           platforms: linux/amd64
           push: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' }}
           tags: ${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          outputs: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && 'type=registry' || 'type=docker,dest=/tmp/myimage.tar' }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          outputs: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && 'type=registry' || format('type=docker,dest=/tmp/{0}-image.tar', matrix.service) }}
 
       - name: Upload Docker image artifact if not pushing
         if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: docker-image
-          path: /tmp/myimage.tar
+          name: ${{ matrix.service }}-image
+          path: /tmp/${{ matrix.service }}-image.tar
 
   deploy-to-vm:
-    needs: [check-build-status, build-docker-image]
+    needs: [check-build-status, build-images]
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Validate VM secrets
         run: |
           if [[ -z "${{ secrets.VM_HOST }}" || -z "${{ secrets.VM_USERNAME }}" || -z "${{ secrets.VM_SSH_KEY }}" ]]; then
@@ -128,12 +141,34 @@ jobs:
           fi
           echo "✅ VM configuration validated"
 
-      - name: Download Docker image artifact if needed
-        if: needs.build-docker-image.outputs.HAS_DOCKER_CREDS == 'false'
+      - name: Download Docker image artifacts if needed
+        if: needs.build-images.outputs.HAS_DOCKER_CREDS == 'false'
         uses: actions/download-artifact@v4
         with:
-          name: docker-image
+          pattern: "*-image"
           path: /tmp
+          merge-multiple: true
+
+      - name: Upload docker-compose and env files to VM
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || '22' }}
+          source: "docker-compose.yml,backend/.env"
+          target: "/tmp/deployment/"
+
+      - name: Upload image artifacts to VM if needed
+        if: needs.build-images.outputs.HAS_DOCKER_CREDS == 'false'
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || '22' }}
+          source: "/tmp/*-image.tar"
+          target: "/tmp/deployment/"
 
       - name: Deploy to VM
         uses: appleboy/ssh-action@v1.0.0
@@ -146,52 +181,128 @@ jobs:
           command_timeout: 300s
           script: |
             set -e
+            cd /tmp/deployment
+            
             echo "🚀 Starting deployment..."
+            
+            HAS_DOCKER_CREDS="${{ needs.build-images.outputs.HAS_DOCKER_CREDS }}"
+            SERVICE_FILTER="${{ github.event.inputs.service || 'all' }}"
 
-            IMAGE_TAG="${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
-            CONTAINER_NAME="${{ env.IMAGE_NAME }}"
-            HAS_DOCKER_CREDS="${{ needs.build-docker-image.outputs.HAS_DOCKER_CREDS }}"
-
-            # Stop and remove existing container
-            echo "🛑 Stopping existing container..."
-            docker stop "$CONTAINER_NAME" 2>/dev/null || echo "No container to stop"
-            docker rm "$CONTAINER_NAME" 2>/dev/null || echo "No container to remove"
-
-            # Handle image based on whether we have Docker Hub credentials
-            if [[ "$HAS_DOCKER_CREDS" == "true" ]]; then
-              echo "📥 Pulling image from Docker Hub..."
-              echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-              docker pull "$IMAGE_TAG"
+            # Create the backend directory and move .env file
+            mkdir -p backend
+            if [[ -f "backend/.env" ]]; then
+              mv backend/.env backend/
+              echo "✅ Backend .env file moved to correct location"
             else
-              echo "📦 Using local Docker image (no registry push)"
-              # Note: Image should already be available locally from previous builds
-              # or you would need to transfer the artifact to the VM
+              echo "⚠️ No backend/.env file found, make sure environment variables are set"
             fi
 
-            # Run new container
-            echo "▶️ Starting new container..."
-            docker run -d \
-              --name "$CONTAINER_NAME" \
-              --restart unless-stopped \
-              -p 80:3000 \
-              -e NODE_ENV=production \
-              -e DEPLOYMENT_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              -e GIT_SHA="${{ github.sha }}" \
-              "$IMAGE_TAG"
-
-            echo "⏳ Waiting 10s for container to start..."
-            sleep 10
-
-            # Verify container is running
-            if docker ps | grep -q "$CONTAINER_NAME"; then
-              echo "✅ Container is running successfully!"
-              docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            # Handle Docker Hub login and image pulling vs local builds
+            if [[ "$HAS_DOCKER_CREDS" == "true" ]]; then
+              echo "📥 Using Docker Hub images..."
+              echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+              
+              # Update docker-compose to use registry images instead of local builds
+              cat > docker-compose.override.yml << 'EOF'
+            version: '3.8'
+            services:
+              backend:
+                image: ${{ secrets.DOCKER_USERNAME || github.repository_owner }}/my-app-backend:latest
+                build: null
+              frontend:
+                image: ${{ secrets.DOCKER_USERNAME || github.repository_owner }}/my-app-frontend:latest
+                build: null
+            EOF
+              
+              docker-compose pull backend frontend
             else
-              echo "❌ Container failed to start!"
-              echo "📋 Container logs:"
-              docker logs "$CONTAINER_NAME" 2>/dev/null || echo "No logs available"
+              echo "📦 Loading Docker images from artifacts..."
+              if [[ -f "backend-image.tar" ]]; then
+                docker load -i backend-image.tar
+                echo "✅ Backend image loaded"
+              fi
+              if [[ -f "frontend-image.tar" ]]; then
+                docker load -i frontend-image.tar
+                echo "✅ Frontend image loaded"
+              fi
+              
+              # Tag the loaded images to match docker-compose expectations
+              if [[ -f "backend-image.tar" ]]; then
+                docker tag ${{ secrets.DOCKER_USERNAME || github.repository_owner }}/my-app-backend:latest backend_backend:latest || true
+              fi
+              if [[ -f "frontend-image.tar" ]]; then
+                docker tag ${{ secrets.DOCKER_USERNAME || github.repository_owner }}/my-app-frontend:latest frontend_frontend:latest || true
+              fi
+            fi
+
+            # Stop existing services
+            echo "🛑 Stopping existing services..."
+            docker-compose down || true
+
+            # Start database first (it's a dependency)
+            echo "🗄️ Starting database..."
+            docker-compose up -d db
+            
+            # Wait for database to be ready
+            echo "⏳ Waiting for database to be ready..."
+            for i in {1..30}; do
+              if docker-compose exec -T db pg_isready -U postgres > /dev/null 2>&1; then
+                echo "✅ Database is ready!"
+                break
+              fi
+              echo "Waiting for database... ($i/30)"
+              sleep 2
+            done
+
+            # Deploy based on service filter
+            if [[ "$SERVICE_FILTER" == "all" ]]; then
+              echo "▶️ Starting all services..."
+              docker-compose up -d
+            elif [[ "$SERVICE_FILTER" == "backend" ]]; then
+              echo "▶️ Starting backend service..."
+              docker-compose up -d backend
+            elif [[ "$SERVICE_FILTER" == "frontend" ]]; then
+              echo "▶️ Starting frontend service..."
+              docker-compose up -d frontend
+            fi
+
+            # Wait for services to start
+            echo "⏳ Waiting 20s for services to start..."
+            sleep 20
+
+            # Verify deployment
+            echo "🔍 Verifying deployment..."
+            docker-compose ps
+            
+            # Check if services are healthy
+            UNHEALTHY_SERVICES=$(docker-compose ps --services --filter "status=exited")
+            if [[ -n "$UNHEALTHY_SERVICES" ]]; then
+              echo "❌ Some services failed to start: $UNHEALTHY_SERVICES"
+              echo "📋 Service logs:"
+              for service in $UNHEALTHY_SERVICES; do
+                echo "--- $service logs ---"
+                docker-compose logs --tail=20 $service
+              done
               exit 1
             fi
+            
+            RUNNING_SERVICES=$(docker-compose ps --services --filter "status=running")
+            if [[ -z "$RUNNING_SERVICES" ]]; then
+              echo "❌ No services are running!"
+              echo "📋 All service logs:"
+              docker-compose logs --tail=20
+              exit 1
+            else
+              echo "✅ Running services: $RUNNING_SERVICES"
+              echo "🌐 Service endpoints:"
+              echo "  - Frontend: http://localhost:3000"
+              echo "  - Backend: http://localhost:8000"
+              echo "  - Database: localhost:5432"
+            fi
+
+            # Cleanup
+            echo "🧹 Cleaning up old images..."
+            docker image prune -f
 
             echo "🎉 Deployment completed successfully!"
 
@@ -207,16 +318,19 @@ jobs:
           echo "- Repository: ${{ github.repository }}"
           echo "- Commit: ${{ github.sha }}"
           echo "- Triggered by: ${{ github.event_name }}"
-          echo "- Image tag: ${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
+          echo "- Service filter: ${{ github.event.inputs.service || 'all' }}"
           
           if [ "${{ needs.deploy-to-vm.result }}" == "success" ]; then
             echo "✅ Deployment succeeded"
             echo ""
             echo "🔧 Manual verification steps:"
             echo "1. SSH to VM: ssh -p ${{ secrets.VM_SSH_PORT || '22' }} ${{ secrets.VM_USERNAME }}@${{ secrets.VM_HOST }}"
-            echo "2. Check container: docker ps"
-            echo "3. Check logs: docker logs ${{ env.IMAGE_NAME }}"
-            echo "4. Test app: curl http://localhost"
+            echo "2. Check services: cd /tmp/deployment && docker-compose ps"
+            echo "3. Check logs: docker-compose logs"
+            echo "4. Test services:"
+            echo "   - Frontend: curl http://localhost:3000"
+            echo "   - Backend: curl http://localhost:8000"
+            echo "   - Database: psql -h localhost -U postgres -d taskdb"
           else
             echo "❌ Deployment failed"
             echo "🔍 Check the deploy-to-vm job logs for details"
