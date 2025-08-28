@@ -57,6 +57,8 @@ jobs:
     env:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      REGISTRY: ${{ env.REGISTRY }}
+      IMAGE_NAME: ${{ env.IMAGE_NAME }}
     outputs:
       IMAGE_TAG: ${{ steps.set-tag.outputs.IMAGE_TAG }}
     steps:
@@ -79,24 +81,12 @@ jobs:
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Build and push Docker image (with credentials)
-        if: env.DOCKER_USERNAME && env.DOCKER_PASSWORD
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
-          push: true
-          tags: ${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build Docker image only (no push)
-        if: !env.DOCKER_USERNAME || !env.DOCKER_PASSWORD
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64
-          push: false
+          push: ${{ env.DOCKER_USERNAME && env.DOCKER_PASSWORD }}
           tags: ${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -136,6 +126,7 @@ jobs:
 
             IMAGE_TAG="${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
             CONTAINER_NAME="${{ env.IMAGE_NAME }}"
+            GIT_SHA="${GITHUB_SHA}"
 
             # Stop and remove existing container
             docker stop "$CONTAINER_NAME" 2>/dev/null || true
@@ -154,7 +145,7 @@ jobs:
               -p 80:3000 \
               -e NODE_ENV=production \
               -e DEPLOYMENT_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              -e GIT_SHA="${GITHUB_SHA}" \
+              -e GIT_SHA="$GIT_SHA" \
               "$IMAGE_TAG"
 
             echo "⏳ Waiting 10s for container to start..."
