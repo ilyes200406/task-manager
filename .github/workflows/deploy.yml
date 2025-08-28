@@ -92,7 +92,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Upload Docker image artifact if not pushing
-        if: !env.DOCKER_USERNAME || !env.DOCKER_PASSWORD
+        if: ${{ !env.DOCKER_USERNAME || !env.DOCKER_PASSWORD }}
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
