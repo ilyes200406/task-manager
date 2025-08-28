@@ -2,7 +2,7 @@ name: Deploy to Local VM
 
 on:
   workflow_run:
-    workflows: ["CI Pipeline"] # Trigger after CI pipeline
+    workflows: ["CI Pipeline"]
     types: [completed]
 
   workflow_dispatch:
@@ -57,6 +57,8 @@ jobs:
     env:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    outputs:
+      IMAGE_TAG: ${{ steps.set-tag.outputs.IMAGE_TAG }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -67,12 +69,15 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Set IMAGE_TAG
+        id: set-tag
         run: |
           if [[ -n "${DOCKER_USERNAME}" ]]; then
-            echo "IMAGE_TAG=${REGISTRY}/${DOCKER_USERNAME}/${IMAGE_NAME}:latest" >> $GITHUB_ENV
+            IMAGE_TAG="${REGISTRY}/${DOCKER_USERNAME}/${IMAGE_NAME}:latest"
           else
-            echo "IMAGE_TAG=${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}:latest" >> $GITHUB_ENV
+            IMAGE_TAG="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}:latest"
           fi
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Log in to Docker Hub
         if: env.DOCKER_USERNAME && env.DOCKER_PASSWORD
@@ -102,9 +107,6 @@ jobs:
     needs: [check-build-status, build-docker-image]
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ env.IMAGE_TAG }}
-      CONTAINER_NAME: ${{ env.IMAGE_NAME }}
     steps:
       - name: Validate VM secrets
         run: |
@@ -127,6 +129,9 @@ jobs:
             set -e
             echo "🚀 Starting deployment..."
 
+            IMAGE_TAG="${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
+            CONTAINER_NAME="${{ env.IMAGE_NAME }}"
+
             # Stop and remove existing container
             docker stop "$CONTAINER_NAME" 2>/dev/null || true
             docker rm "$CONTAINER_NAME" 2>/dev/null || true
@@ -137,7 +142,7 @@ jobs:
               docker pull "$IMAGE_TAG"
             fi
 
-            # Start new container
+            # Run new container
             docker run -d \
               --name "$CONTAINER_NAME" \
               --restart unless-stopped \
