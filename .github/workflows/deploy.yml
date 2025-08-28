@@ -2,8 +2,9 @@ name: Deploy to Local VM
 
 on:
   workflow_run:
-    workflows: ["CI Pipeline"]
+    workflows: ["CI Pipeline"]  # Match your actual CI workflow name
     types: [completed]
+    branches: [main, master]
 
   workflow_dispatch:
     inputs:
@@ -37,14 +38,14 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "${{ github.event.inputs.force_deploy }}" == "true" ]]; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
-              echo "🚨 Force deployment triggered"
+              echo "🚨 Force deployment triggered - bypassing build check"
             else
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "📋 Manual deployment triggered"
             fi
           elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
             echo "should-deploy=true" >> $GITHUB_OUTPUT
-            echo "✅ Build workflow succeeded"
+            echo "✅ Build workflow succeeded, proceeding with deployment"
           else
             echo "should-deploy=false" >> $GITHUB_OUTPUT
             echo "❌ Build workflow failed, skipping deployment"
@@ -54,13 +55,8 @@ jobs:
     needs: check-build-status
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
-    env:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-      REGISTRY: ${{ env.REGISTRY }}
-      IMAGE_NAME: ${{ env.IMAGE_NAME }}
     outputs:
-      IMAGE_TAG: ${{ steps.set-tag.outputs.IMAGE_TAG }}
+      IMAGE_TAG: my-app:latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,29 +66,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Set IMAGE_TAG
-        id: set-tag
-        run: |
-          if [[ -n "${DOCKER_USERNAME}" ]]; then
-            IMAGE_TAG="${REGISTRY}/${DOCKER_USERNAME}/${IMAGE_NAME}:latest"
-          else
-            IMAGE_TAG="${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}:latest"
-          fi
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker image
+      - name: Build and optionally push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ env.DOCKER_USERNAME && env.DOCKER_PASSWORD }}
-          tags: ${{ env.IMAGE_TAG }}
+          push: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
+          tags: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/myimage.tar
 
       - name: Upload Docker image artifact if not pushing
-        if: ${{ !env.DOCKER_USERNAME || !env.DOCKER_PASSWORD }}
+        if: ${{ !secrets.DOCKER_USERNAME || !secrets.DOCKER_PASSWORD }}
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
@@ -103,10 +96,11 @@ jobs:
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Validate VM secrets
+      - name: Validate VM configuration
         run: |
-          if [[ -z "${{ secrets.VM_HOST }}" || -z "${{ secrets.VM_USERNAME }}" || -z "${{ secrets.VM_SSH_KEY }}" ]]; then
+          if [[ -z "${{ secrets.VM_HOST }}" ]] || [[ -z "${{ secrets.VM_USERNAME }}" ]] || [[ -z "${{ secrets.VM_SSH_KEY }}" ]]; then
             echo "❌ VM deployment secrets not configured"
+            echo "Required secrets: VM_HOST, VM_USERNAME, VM_SSH_KEY"
             exit 1
           fi
           echo "✅ VM configuration validated"
@@ -122,9 +116,9 @@ jobs:
           command_timeout: 300s
           script: |
             set -e
-            echo "🚀 Starting deployment..."
+            echo "🚀 Starting deployment to VM..."
 
-            IMAGE_TAG="${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
             CONTAINER_NAME="${{ env.IMAGE_NAME }}"
             GIT_SHA="${GITHUB_SHA}"
 
@@ -170,8 +164,11 @@ jobs:
           echo "- Repository: ${{ github.repository }}"
           echo "- Commit: ${{ github.sha }}"
           echo "- Triggered by: ${{ github.event_name }}"
-          if [ "${{ needs.deploy-to-vm.result }}" == "success" ]; then
-            echo "✅ Deployment succeeded"
+          if [[ "${{ needs.deploy-to-vm.result }}" == "success" ]]; then
+            echo "✅ Deployment completed successfully"
+            echo "🔧 To verify manually:"
+            echo "1. SSH to your VM and check: docker ps"
+            echo "2. Test the application: curl http://localhost"
           else
             echo "❌ Deployment failed"
-          fi
+            echo "🔍 Check the deploy-to-vm job logs for details"
