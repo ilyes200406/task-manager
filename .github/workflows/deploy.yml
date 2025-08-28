@@ -1,11 +1,10 @@
 name: Deploy to Local VM
-#wawa
+
 on:
   workflow_run:
-    workflows: ["CI Pipeline"]  # Fixed: Match the actual CI workflow name
+    workflows: ["CI Pipeline"]
     types: [completed]
-    branches: [main, master]
-  
+
   workflow_dispatch:
     inputs:
       force_deploy:
@@ -38,14 +37,14 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "${{ github.event.inputs.force_deploy }}" == "true" ]]; then
               echo "should-deploy=true" >> $GITHUB_OUTPUT
-              echo "🚨 Force deployment triggered - bypassing build check"
+              echo "🚨 Force deployment triggered"
             else
               echo "should-deploy=true" >> $GITHUB_OUTPUT
               echo "📋 Manual deployment triggered"
             fi
           elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
             echo "should-deploy=true" >> $GITHUB_OUTPUT
-            echo "✅ Build workflow succeeded, proceeding with deployment"
+            echo "✅ Build workflow succeeded"
           else
             echo "should-deploy=false" >> $GITHUB_OUTPUT
             echo "❌ Build workflow failed, skipping deployment"
@@ -55,7 +54,9 @@ jobs:
     needs: check-build-status
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
-    
+    outputs:
+      IMAGE_TAG: ${{ steps.set-tag.outputs.IMAGE_TAG }}
+      HAS_DOCKER_CREDS: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -65,42 +66,49 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Only login if secrets are available
+      - name: Check Docker credentials
+        id: check-creds
+        run: |
+          if [[ -n "${{ secrets.DOCKER_USERNAME }}" && -n "${{ secrets.DOCKER_PASSWORD }}" ]]; then
+            echo "HAS_DOCKER_CREDS=true" >> $GITHUB_OUTPUT
+            echo "✅ Docker Hub credentials found"
+          else
+            echo "HAS_DOCKER_CREDS=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No Docker Hub credentials, will build locally only"
+          fi
+
+      - name: Set IMAGE_TAG
+        id: set-tag
+        run: |
+          if [[ -n "${{ secrets.DOCKER_USERNAME }}" ]]; then
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest"
+          else
+            IMAGE_TAG="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+          fi
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Using image tag: $IMAGE_TAG"
+
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
+        if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push Docker image
+      - name: Build and optionally push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ secrets.DOCKER_USERNAME && secrets.DOCKER_PASSWORD }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' }}
+          tags: ${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          outputs: type=docker,dest=/tmp/myimage.tar  # Save locally if not pushing
-          build-args: |
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
-            VCS_REF=${{ github.sha }}
+          outputs: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && 'type=registry' || 'type=docker,dest=/tmp/myimage.tar' }}
 
-      # Upload image as artifact if not pushing to registry
-      - name: Upload Docker image
-        if: ${{ !secrets.DOCKER_USERNAME || !secrets.DOCKER_PASSWORD }}
+      - name: Upload Docker image artifact if not pushing
+        if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: docker-image
@@ -110,19 +118,24 @@ jobs:
     needs: [check-build-status, build-docker-image]
     if: needs.check-build-status.outputs.should-deploy == 'true'
     runs-on: ubuntu-latest
-    
     steps:
-      # Check if VM secrets are configured
-      - name: Validate VM configuration
+      - name: Validate VM secrets
         run: |
-          if [[ -z "${{ secrets.VM_HOST }}" ]] || [[ -z "${{ secrets.VM_USERNAME }}" ]] || [[ -z "${{ secrets.VM_SSH_KEY }}" ]]; then
+          if [[ -z "${{ secrets.VM_HOST }}" || -z "${{ secrets.VM_USERNAME }}" || -z "${{ secrets.VM_SSH_KEY }}" ]]; then
             echo "❌ VM deployment secrets not configured"
             echo "Required secrets: VM_HOST, VM_USERNAME, VM_SSH_KEY"
             exit 1
           fi
           echo "✅ VM configuration validated"
 
-      - name: Deploy to VirtualBox VM
+      - name: Download Docker image artifact if needed
+        if: needs.build-docker-image.outputs.HAS_DOCKER_CREDS == 'false'
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Deploy to VM
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.VM_HOST }}
@@ -133,35 +146,29 @@ jobs:
           command_timeout: 300s
           script: |
             set -e
-            echo "🚀 Starting deployment to VM..."
-            
-            # Set variables
-            IMAGE_TAG="${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME || github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+            echo "🚀 Starting deployment..."
+
+            IMAGE_TAG="${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
             CONTAINER_NAME="${{ env.IMAGE_NAME }}"
-            
-            # Only login if using Docker Hub
-            if [[ -n "${{ secrets.DOCKER_USERNAME }}" ]] && [[ -n "${{ secrets.DOCKER_PASSWORD }}" ]]; then
-              echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-              
-              # Pull latest image
-              echo "📥 Pulling latest Docker image..."
-              docker pull "$IMAGE_TAG"
-            else
-              echo "⚠️ No Docker Hub credentials, assuming local image build"
-            fi
-            
-            # Create backup of current container (if exists)
-            if docker ps -q -f name="$CONTAINER_NAME" | grep -q .; then
-              echo "💾 Creating backup of current container..."
-              docker commit "$CONTAINER_NAME" "${CONTAINER_NAME}-backup-$(date +%Y%m%d-%H%M%S)" || true
-            fi
-            
+            HAS_DOCKER_CREDS="${{ needs.build-docker-image.outputs.HAS_DOCKER_CREDS }}"
+
             # Stop and remove existing container
             echo "🛑 Stopping existing container..."
             docker stop "$CONTAINER_NAME" 2>/dev/null || echo "No container to stop"
             docker rm "$CONTAINER_NAME" 2>/dev/null || echo "No container to remove"
-            
-            # Start new container
+
+            # Handle image based on whether we have Docker Hub credentials
+            if [[ "$HAS_DOCKER_CREDS" == "true" ]]; then
+              echo "📥 Pulling image from Docker Hub..."
+              echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+              docker pull "$IMAGE_TAG"
+            else
+              echo "📦 Using local Docker image (no registry push)"
+              # Note: Image should already be available locally from previous builds
+              # or you would need to transfer the artifact to the VM
+            fi
+
+            # Run new container
             echo "▶️ Starting new container..."
             docker run -d \
               --name "$CONTAINER_NAME" \
@@ -171,40 +178,45 @@ jobs:
               -e DEPLOYMENT_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               -e GIT_SHA="${{ github.sha }}" \
               "$IMAGE_TAG"
-            
-            # Wait for container to start
-            echo "⏳ Waiting for container to start..."
+
+            echo "⏳ Waiting 10s for container to start..."
             sleep 10
-            
-            # Check if container is running
+
+            # Verify container is running
             if docker ps | grep -q "$CONTAINER_NAME"; then
               echo "✅ Container is running successfully!"
               docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
             else
               echo "❌ Container failed to start!"
+              echo "📋 Container logs:"
               docker logs "$CONTAINER_NAME" 2>/dev/null || echo "No logs available"
               exit 1
             fi
-            
+
             echo "🎉 Deployment completed successfully!"
 
   verify-deployment:
     needs: deploy-to-vm
     runs-on: ubuntu-latest
-    if: always()  # Run even if previous steps had issues
-    
+    if: always()
     steps:
       - name: Deployment summary
         run: |
           echo "📋 Deployment Summary"
+          echo "===================="
           echo "- Repository: ${{ github.repository }}"
           echo "- Commit: ${{ github.sha }}"
           echo "- Triggered by: ${{ github.event_name }}"
-          if [[ "${{ needs.deploy-to-vm.result }}" == "success" ]]; then
-            echo "✅ Deployment completed successfully"
-            echo "🔧 To verify manually:"
-            echo "1. SSH to your VM and check: docker ps"
-            echo "2. Test the application: curl http://localhost"
+          echo "- Image tag: ${{ needs.build-docker-image.outputs.IMAGE_TAG }}"
+          
+          if [ "${{ needs.deploy-to-vm.result }}" == "success" ]; then
+            echo "✅ Deployment succeeded"
+            echo ""
+            echo "🔧 Manual verification steps:"
+            echo "1. SSH to VM: ssh -p ${{ secrets.VM_SSH_PORT || '22' }} ${{ secrets.VM_USERNAME }}@${{ secrets.VM_HOST }}"
+            echo "2. Check container: docker ps"
+            echo "3. Check logs: docker logs ${{ env.IMAGE_NAME }}"
+            echo "4. Test app: curl http://localhost"
           else
             echo "❌ Deployment failed"
             echo "🔍 Check the deploy-to-vm job logs for details"
