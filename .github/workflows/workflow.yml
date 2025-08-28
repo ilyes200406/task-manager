@@ -34,9 +34,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      ################################
+      ###############################
       # PYTHON
-      ################################
+      ###############################
       - name: Setup Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v4
