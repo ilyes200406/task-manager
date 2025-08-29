@@ -100,10 +100,24 @@ jobs:
 
       - name: Log in to Docker Hub
         if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true'
+        continue-on-error: true
+        id: docker-login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Update credentials status after login attempt
+        if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true'
+        id: update-creds
+        run: |
+          if [[ "${{ steps.docker-login.outcome }}" == "success" ]]; then
+            echo "DOCKER_LOGIN_SUCCESS=true" >> $GITHUB_OUTPUT
+            echo "✅ Docker Hub login successful"
+          else
+            echo "DOCKER_LOGIN_SUCCESS=false" >> $GITHUB_OUTPUT
+            echo "❌ Docker Hub login failed, will use local build"
+          fi
 
       - name: Build and optionally push Docker image
         uses: docker/build-push-action@v5
@@ -111,14 +125,14 @@ jobs:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
           platforms: linux/amd64
-          push: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' }}
+          push: ${{ steps.update-creds.outputs.DOCKER_LOGIN_SUCCESS == 'true' || steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && steps.docker-login.outcome == 'success' }}
           tags: ${{ env.IMAGE_TAG }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-          outputs: ${{ steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && 'type=registry' || format('type=docker,dest=/tmp/{0}-image.tar', matrix.service) }}
+          outputs: ${{ (steps.update-creds.outputs.DOCKER_LOGIN_SUCCESS == 'true' || (steps.check-creds.outputs.HAS_DOCKER_CREDS == 'true' && steps.docker-login.outcome == 'success')) && 'type=registry' || format('type=docker,dest=/tmp/{0}-image.tar', matrix.service) }}
 
       - name: Upload Docker image artifact if not pushing
-        if: steps.check-creds.outputs.HAS_DOCKER_CREDS == 'false'
+        if: ${{ steps.update-creds.outputs.DOCKER_LOGIN_SUCCESS != 'true' && (steps.check-creds.outputs.HAS_DOCKER_CREDS != 'true' || steps.docker-login.outcome != 'success') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.service }}-image
